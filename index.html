@@ -139,7 +139,7 @@
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     color: rgba(240,235,228,0.85);
-    display: flex;
+    display: none; /* hidden on desktop — drag-and-drop already covers this there */
     align-items: center;
     justify-content: center;
     cursor: pointer;
@@ -491,6 +491,13 @@
   }
   .chat-close svg { width: 16px; height: 16px; }
 
+  .chat-body-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0; /* lets the inner scrollable chat-body actually shrink instead of overflowing the flex column */
+    display: flex;
+  }
+
   .chat-body {
     flex: 1;
     padding: 14px 16px;
@@ -498,7 +505,43 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    transition: filter 0.15s ease;
   }
+
+  /* Privacy mode: blurs the message content so it can't be read at a
+     glance (over-the-shoulder, screen share, etc.) but unblurs instantly
+     on hover/touch so the person using it can still read normally. */
+  .chat-body-wrap.privacy-on .chat-body {
+    filter: blur(8px);
+    pointer-events: none;
+  }
+  .chat-body-wrap.privacy-on:hover .chat-body,
+  .chat-body-wrap.privacy-on.peek .chat-body {
+    filter: blur(0);
+    pointer-events: auto;
+  }
+
+  .privacy-toggle {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(20,18,24,0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: rgba(240,235,228,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .privacy-toggle svg { width: 15px; height: 15px; }
+  .privacy-toggle:hover { color: rgba(240,235,228,0.9); }
+  .privacy-toggle.active { color: #e8a15f; border-color: rgba(232,161,95,0.4); }
 
   .msg {
     max-width: 80%;
@@ -577,7 +620,7 @@
     .load-btn { padding: 9px 14px; font-size: 13px; }
 
     /* Upload + chat icons sit side by side in one row on mobile, same size */
-    .bg-upload-btn { top: 16px; right: 68px; width: 44px; height: 44px; }
+    .bg-upload-btn { display: flex; top: 16px; right: 68px; width: 44px; height: 44px; }
     .chat-fab {
       top: 16px;
       bottom: auto;
@@ -689,7 +732,15 @@
       <button class="load-btn" id="roomJoinBtn">Join</button>
       <button class="load-btn" id="copyLinkBtn" title="Copy shareable invite link" aria-label="Copy invite link" style="display:none;">Copy link</button>
     </div>
-    <div class="chat-body" id="chatBody"></div>
+    <div class="chat-body-wrap" id="chatBodyWrap">
+      <div class="chat-body" id="chatBody"></div>
+      <button class="privacy-toggle" id="privacyToggle" title="Blur chat (hover to reveal)" aria-pressed="false" aria-label="Toggle chat privacy blur">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
+    </div>
     <div class="chat-input-row">
       <input type="text" id="chatInput" placeholder="Type a message...">
       <button class="chat-send" id="chatSend" aria-label="Send">
@@ -723,6 +774,11 @@
   const connections = new Set();
   let isHost = false;
   let currentRoomCode = null;
+  let myPeerId = null; // this tab's own PeerJS id, so we can refuse to connect to ourselves
+  let roomEpoch = 0;   // bumped every time joinRoom() runs, so stale async callbacks
+                        // (retries, timeouts, in-flight chunk transfers) from a previous
+                        // connection attempt can detect they're outdated and bail out
+                        // instead of corrupting the current one.
 
   function broadcast(payload, exceptConn) {
     connections.forEach((c) => {
@@ -903,6 +959,7 @@
   let progressInterval = null;
   let pendingPlaylistId = null;
   let lastLoadedPlaylistUrl = null;
+  let lastPlaylistLoadedAt = 0; // timestamp of the newest playlist load we know about, used to reject stale/looped sync messages
 
   function extractPlaylistId(url) {
     try {
@@ -1020,9 +1077,13 @@
     }
     // Only broadcast to connected peers when the user themself loaded it
     // (not when we're the one applying an incoming sync), so it doesn't
-    // echo forever between peers.
+    // echo forever between peers. A fresh timestamp on every user-initiated
+    // load lets receivers tell "a genuinely new load" apart from "an old
+    // message arriving late/out of order", so a stale relay can never
+    // overwrite a playlist you just picked.
     if (!fromSync && connections.size > 0) {
-      broadcast({ kind: 'playlist-sync', url: url, time: 0, playing: true });
+      lastPlaylistLoadedAt = Date.now();
+      broadcast({ kind: 'playlist-sync', url: url, time: 0, playing: true, loadedAt: lastPlaylistLoadedAt });
     }
   }
 
@@ -1030,6 +1091,14 @@
   // everyone in the room hears the same moment of the same song, not just
   // the same playlist started independently.
   function applyIncomingPlaylistSync(data) {
+    // Ignore anything older than (or equal to) the newest load we already
+    // know about — this is what stops a relayed/looped message from a
+    // moment ago from stomping back over a playlist you just changed to.
+    if (typeof data.loadedAt === 'number' && data.loadedAt <= lastPlaylistLoadedAt) {
+      return;
+    }
+    if (typeof data.loadedAt === 'number') lastPlaylistLoadedAt = data.loadedAt;
+
     const isSamePlaylist = data.url === lastLoadedPlaylistUrl;
     if (!isSamePlaylist) {
       loadPlaylistFromUrl(data.url, true);
@@ -1105,11 +1174,35 @@
   const chatClose = document.getElementById('chatClose');
   const chatInput = document.getElementById('chatInput');
   const chatSend = document.getElementById('chatSend');
+  const chatBodyWrap = document.getElementById('chatBodyWrap');
   const chatBody = document.getElementById('chatBody');
   const chatStatus = document.getElementById('chatStatus');
   const roomInput = document.getElementById('roomInput');
   const roomJoinBtn = document.getElementById('roomJoinBtn');
   const copyLinkBtn = document.getElementById('copyLinkBtn');
+  const privacyToggle = document.getElementById('privacyToggle');
+
+  // Privacy mode: blurs chat content so it isn't readable at a glance
+  // (over someone's shoulder, on a shared screen, etc). Hovering reveals it
+  // instantly on desktop; on touch devices there's no hover, so a tap
+  // "peeks" at the content for a few seconds instead.
+  let privacyOn = false;
+  privacyToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    privacyOn = !privacyOn;
+    chatBodyWrap.classList.toggle('privacy-on', privacyOn);
+    privacyToggle.classList.toggle('active', privacyOn);
+    privacyToggle.setAttribute('aria-pressed', String(privacyOn));
+    chatBodyWrap.classList.remove('peek');
+  });
+
+  let peekTimeout = null;
+  chatBodyWrap.addEventListener('click', () => {
+    if (!privacyOn) return;
+    chatBodyWrap.classList.add('peek');
+    clearTimeout(peekTimeout);
+    peekTimeout = setTimeout(() => chatBodyWrap.classList.remove('peek'), 2500);
+  });
 
   function addMessage(text, mine) {
     const div = document.createElement('div');
@@ -1148,11 +1241,25 @@
     }
   }
 
-  function wireConnection(conn) {
+  function wireConnection(conn, epoch) {
+    // A connection finishing after joinRoom() was called again (room switch,
+    // retry, etc.) belongs to a previous attempt — drop it instead of mixing
+    // two rooms' peers together.
+    if (epoch !== roomEpoch) {
+      try { conn.close(); } catch (e) {}
+      return;
+    }
+    // Never wire a connection to ourselves — this is what caused messages
+    // and background syncs to bounce back and appear to come from "someone
+    // else" when they were actually self-sent.
+    if (conn.peer === myPeerId) {
+      try { conn.close(); } catch (e) {}
+      return;
+    }
     connections.add(conn);
     conn.on('open', () => {
       updateStatus();
-      sendCurrentStateTo(conn);
+      sendCurrentStateTo(conn, 0, epoch);
     });
     conn.on('data', (data) => handleIncomingData(data, conn));
     conn.on('close', () => {
@@ -1169,8 +1276,9 @@
   // single newly-joined peer. Retries briefly if the YouTube player or
   // background state isn't ready yet, so a peer that joins early doesn't
   // miss the sync.
-  function sendCurrentStateTo(conn, attempt) {
+  function sendCurrentStateTo(conn, attempt, epoch) {
     attempt = attempt || 0;
+    if (epoch !== roomEpoch) return; // this room attempt was superseded — stop retrying
     if (!conn.open) return;
 
     if (lastLoadedPlaylistUrl) {
@@ -1180,10 +1288,11 @@
           kind: 'playlist-sync',
           url: lastLoadedPlaylistUrl,
           time: ytPlayer.getCurrentTime(),
-          playing: ytPlayer.getPlayerState() === YT.PlayerState.PLAYING
+          playing: ytPlayer.getPlayerState() === YT.PlayerState.PLAYING,
+          loadedAt: lastPlaylistLoadedAt
         });
       } else if (attempt < 12) {
-        setTimeout(() => sendCurrentStateTo(conn, attempt + 1), 500);
+        setTimeout(() => sendCurrentStateTo(conn, attempt + 1, epoch), 500);
       }
     }
 
@@ -1225,34 +1334,68 @@
     }
   }
 
-  function becomeHost(peerId) {
+  function becomeHost(peerId, epoch) {
+    if (epoch !== roomEpoch) return; // superseded by a newer joinRoom() call
     isHost = true;
     peer = new Peer(peerId);
-    peer.on('open', () => setStatus('waiting for others', false));
-    peer.on('connection', (conn) => wireConnection(conn));
+    peer.on('open', (id) => {
+      if (epoch !== roomEpoch) { peer.destroy(); return; }
+      myPeerId = id;
+      setStatus('waiting for others', false);
+    });
+    peer.on('connection', (conn) => wireConnection(conn, epoch));
     peer.on('error', (err) => {
+      if (epoch !== roomEpoch) return;
       if (err && err.type === 'unavailable-id') {
-        // Someone else claimed this room code a moment before us — join them instead.
+        // Someone else already holds this room's host id — but if we're
+        // already the confirmed host of this exact peer id, this is a
+        // spurious re-fire from the signaling connection blipping, not a
+        // real conflict. Only fall back to joining if we never actually
+        // became this host in the first place.
+        if (myPeerId === peerId) return;
         isHost = false;
-        joinHost(peerId);
+        joinHost(peerId, epoch);
       } else if (!(err && err.type === 'peer-unavailable')) {
         setStatus('connection error', false);
       }
     });
   }
 
-  function joinHost(hostPeerId) {
+  function joinHost(hostPeerId, epoch) {
+    if (epoch !== roomEpoch) return; // superseded by a newer joinRoom() call
     peer = new Peer(); // random anonymous id, never shown anywhere
-    peer.on('open', () => {
+    let settled = false; // guards against both the timeout and a late error/open firing twice
+    peer.on('open', (id) => {
+      if (epoch !== roomEpoch) { peer.destroy(); return; }
+      myPeerId = id;
+      if (id === hostPeerId) {
+        // Extremely unlikely id collision with ourselves — just claim the room directly.
+        settled = true;
+        isHost = true;
+        return;
+      }
       const conn = peer.connect(hostPeerId, { reliable: true });
-      conn.on('open', () => wireConnection(conn));
-      conn.on('error', () => becomeHost(hostPeerId)); // no host found — claim the room ourselves
+      conn.on('open', () => {
+        if (epoch !== roomEpoch) { conn.close(); return; }
+        settled = true;
+        wireConnection(conn, epoch);
+      });
+      conn.on('error', () => {
+        if (settled || epoch !== roomEpoch) return;
+        settled = true;
+        becomeHost(hostPeerId, epoch); // no host found — claim the room ourselves
+      });
       setTimeout(() => {
-        if (!conn.open) becomeHost(hostPeerId);
-      }, 3000);
+        if (settled || epoch !== roomEpoch) return;
+        if (!conn.open) {
+          settled = true;
+          becomeHost(hostPeerId, epoch);
+        }
+      }, 4000);
     });
-    peer.on('connection', (conn) => wireConnection(conn)); // mesh: others can also connect to us
+    peer.on('connection', (conn) => wireConnection(conn, epoch)); // mesh: others can also connect to us
     peer.on('error', (err) => {
+      if (epoch !== roomEpoch) return;
       if (!(err && err.type === 'peer-unavailable')) {
         setStatus('connection error', false);
       }
@@ -1262,14 +1405,27 @@
   function joinRoom(code) {
     code = (code || '').trim();
     if (!code) return;
-    if (peer) peer.destroy();
+
+    // Bump the epoch first so any in-flight async work from a previous
+    // joinRoom() call (retries, timeouts, chunk reassembly) recognizes
+    // itself as stale and stops touching shared state.
+    roomEpoch++;
+    const epoch = roomEpoch;
+
+    // Actually close old connections (not just clear the Set) so a peer
+    // from a previous room doesn't keep sending data into the new one.
+    connections.forEach((c) => { try { c.close(); } catch (e) {} });
     connections.clear();
+    if (peer) { try { peer.destroy(); } catch (e) {} }
+
     isHost = false;
+    myPeerId = null;
+    bgChunkBuffer = {}; // drop any partially-received background transfer from before
     currentRoomCode = code;
     chatBody.innerHTML = '';
     setStatus('connecting...', false);
     addSystemNote('Joining room "' + code + '"...');
-    joinHost(roomToPeerId(code));
+    joinHost(roomToPeerId(code), epoch);
 
     // Reflect the room code in the URL (without reloading the page) so the
     // current tab's address bar becomes a shareable link straight into
