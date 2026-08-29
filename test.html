@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hero Section</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+  }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+
+  .hero {
+    position: relative;
+    height: 100vh;
+    width: 100%;
+    overflow: hidden;
+    background-image: url("https://images.unsplash.com/photo-1519681393784-d120267933ba?q=80&w=2000&auto=format&fit=crop");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+
+  /* darken image for text/control legibility */
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 900px 600px at 72% 20%, rgba(0,0,0,0.15), transparent 60%),
+      linear-gradient(180deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.15) 40%, rgba(0,0,0,0.55) 100%);
+    pointer-events: none;
+  }
+
+  /* subtle grain */
+  .hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+    pointer-events: none;
+  }
+
+  .bg-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+    display: none;
+  }
+
+  .bg-video.active { display: block; }
+
+  /* when a video bg is active, hide the image layer beneath it */
+  .hero.video-active {
+    background-image: none;
+  }
+
+  .drop-hint {
+    position: absolute;
+    inset: 0;
+    z-index: 8;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10,9,12,0.55);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    pointer-events: none;
+  }
+
+  .hero.drag-over .drop-hint { display: flex; }
+
+  .drop-hint-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 32px 44px;
+    border: 1.5px dashed rgba(240,235,228,0.5);
+    border-radius: 18px;
+    color: rgba(240,235,228,0.9);
+    font-size: 14px;
+  }
+
+  .drop-hint-inner svg { width: 30px; height: 30px; }
+
+  /* ---- Clock ---- */
+  .clock {
+    position: absolute;
+    top: 28px;
+    left: 32px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 20px;
+    font-weight: 400;
+    letter-spacing: 0.5px;
+    color: rgba(240,235,228,0.88);
+    z-index: 5;
+    user-select: none;
+    text-shadow: 0 1px 8px rgba(0,0,0,0.4);
+  }
+
+  .clock .colon {
+    animation: blink 2s steps(1) infinite;
+  }
+
+  .clock .ampm {
+    font-size: 12px;
+    margin-left: 4px;
+    color: rgba(240,235,228,0.5);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    letter-spacing: 1px;
+  }
+
+  @keyframes blink {
+    0%, 45% { opacity: 1; }
+    50%, 95% { opacity: 0.15; }
+    100% { opacity: 1; }
+  }
+
+  /* ---- Music player ---- */
+  .player {
+    position: absolute;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+    background: rgba(20,18,24,0.55);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+    width: min(420px, calc(100vw - 48px));
+  }
+
+  .player-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .player-url-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding-top: 10px;
+  }
+
+  .player-url-row input {
+    flex: 1;
+    min-width: 0;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px;
+    padding: 7px 12px;
+    color: rgba(240,235,228,0.9);
+    font-size: 12px;
+    outline: none;
+  }
+  .player-url-row input::placeholder { color: rgba(240,235,228,0.35); }
+
+  .load-btn {
+    flex-shrink: 0;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: rgba(240,235,228,0.9);
+    font-size: 12px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .load-btn:hover { background: rgba(255,255,255,0.16); }
+
+  .next-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255,255,255,0.1);
+    color: rgba(240,235,228,0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .next-btn svg { width: 14px; height: 14px; }
+  .next-btn:disabled, .play-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .player-art {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, #d87a3a, #6b4a9c, #d87a3a);
+    flex-shrink: 0;
+    animation: spin 8s linear infinite paused;
+  }
+
+  .player-art.spinning { animation-play-state: running; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .play-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255,255,255,0.92);
+    color: #14131a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+  .play-btn:hover { transform: scale(1.06); }
+  .play-btn:active { transform: scale(0.94); }
+
+  .play-btn svg { width: 14px; height: 14px; }
+
+  .player-mid {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .track-title {
+    font-size: 12.5px;
+    color: rgba(240,235,228,0.85);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .progress-track {
+    position: relative;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.14);
+    cursor: pointer;
+  }
+
+  .progress-fill {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 30%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #d87a3a, #e8a15f);
+  }
+
+  /* ---- Chat icon ---- */
+  .chat-fab {
+    position: absolute;
+    bottom: 28px;
+    right: 28px;
+    z-index: 6;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(20,18,24,0.6);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: rgba(240,235,228,0.9);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+  .chat-fab:hover { transform: translateY(-2px); background: rgba(28,25,32,0.7); }
+  .chat-fab svg { width: 22px; height: 22px; }
+
+  /* ---- Chat popup ---- */
+  .chat-popup {
+    position: absolute;
+    bottom: 92px;
+    right: 28px;
+    z-index: 7;
+    width: min(320px, calc(100vw - 48px));
+    height: 400px;
+    max-height: calc(100vh - 140px);
+    background: rgba(18,16,22,0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 16px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+
+  .chat-popup.open {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+  }
+
+  .chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    color: rgba(240,235,228,0.9);
+    font-size: 13.5px;
+  }
+
+  .chat-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .chat-status {
+    font-size: 10.5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.08);
+    color: rgba(240,235,228,0.55);
+  }
+
+  .chat-status.online {
+    background: rgba(84,196,120,0.16);
+    color: #7fdb9a;
+  }
+
+  .chat-room-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .chat-room-row input {
+    flex: 1;
+    min-width: 0;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px;
+    padding: 7px 12px;
+    color: rgba(240,235,228,0.9);
+    font-size: 12px;
+    outline: none;
+  }
+  .chat-room-row input::placeholder { color: rgba(240,235,228,0.35); }
+
+  .chat-my-id {
+    padding: 8px 12px;
+    font-size: 11px;
+    color: rgba(240,235,228,0.5);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #myIdText {
+    color: rgba(240,235,228,0.85);
+    font-family: 'Courier New', monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.5px;
+  }
+
+  .copy-id-btn {
+    margin-left: auto;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(240,235,228,0.8);
+    font-size: 10.5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .copy-id-btn:hover { background: rgba(255,255,255,0.14); }
+
+  .chat-close {
+    background: none;
+    border: none;
+    color: rgba(240,235,228,0.5);
+    cursor: pointer;
+    display: flex;
+    padding: 2px;
+  }
+  .chat-close svg { width: 16px; height: 16px; }
+
+  .chat-body {
+    flex: 1;
+    padding: 14px 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .msg {
+    max-width: 80%;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .msg.them {
+    align-self: flex-start;
+    background: rgba(255,255,255,0.07);
+    color: rgba(240,235,228,0.85);
+    border-bottom-left-radius: 4px;
+  }
+
+  .msg.me {
+    align-self: flex-end;
+    background: linear-gradient(135deg, #d87a3a, #b85c2e);
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+
+  .chat-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .chat-input-row input {
+    flex: 1;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px;
+    padding: 9px 14px;
+    color: rgba(240,235,228,0.9);
+    font-size: 13px;
+    outline: none;
+  }
+  .chat-input-row input::placeholder { color: rgba(240,235,228,0.35); }
+
+  .chat-send {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255,255,255,0.92);
+    color: #14131a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .chat-send svg { width: 14px; height: 14px; }
+
+  @media (max-width: 520px) {
+    .clock { top: 18px; left: 18px; font-size: 17px; }
+    .chat-fab { bottom: 20px; right: 20px; }
+    .player { bottom: 20px; }
+    .chat-popup { right: 20px; bottom: 84px; }
+  }
+</style>
+</head>
+<body>
+
+<section class="hero" id="hero">
+
+  <video class="bg-video" id="bgVideo" autoplay loop muted playsinline></video>
+
+  <div class="drop-hint" id="dropHint">
+    <div class="drop-hint-inner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 16V4M12 4 7 9M12 4l5 5"/>
+        <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+      </svg>
+      <span>Drop an image, GIF, or video</span>
+    </div>
+  </div>
+
+  <div class="clock" id="clock">--:-- <span class="ampm" id="ampm">--</span></div>
+
+  <div class="player">
+    <div class="player-top">
+      <div class="player-art" id="playerArt"></div>
+      <button class="play-btn" id="playBtn" aria-label="Play">
+        <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <div class="player-mid">
+        <div class="track-title" id="trackTitle">Loading default playlist...</div>
+        <div class="progress-track" id="progressTrack">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+      <button class="next-btn" id="nextBtn" aria-label="Next track">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5v14l10-7zM16 5h2v14h-2z"/></svg>
+      </button>
+    </div>
+    <div class="player-url-row">
+      <input type="text" id="playlistUrl" placeholder="youtube.com/playlist?list=..." value="https://www.youtube.com/watch?v=lNW8qsoeWs4&list=PLZ_6tfK0vRcCv5KC8qPcvuSQ3tukBdxeD">
+      <button class="load-btn" id="loadBtn">Load</button>
+    </div>
+    <div id="ytPlayer" style="position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;"></div>
+  </div>
+
+  <button class="chat-fab" id="chatFab" aria-label="Open chat">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+    </svg>
+  </button>
+
+  <div class="chat-popup" id="chatPopup">
+    <div class="chat-header">
+      <div class="chat-header-left">
+        <span>Chat</span>
+        <span class="chat-status" id="chatStatus">connecting...</span>
+      </div>
+      <button class="chat-close" id="chatClose" aria-label="Close chat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="chat-room-row">
+      <input type="text" id="roomInput" placeholder="Room name" value="lobby">
+      <button class="load-btn" id="roomJoinBtn">Join</button>
+    </div>
+    <div class="chat-body" id="chatBody"></div>
+    <div class="chat-input-row">
+      <input type="text" id="chatInput" placeholder="Type a message...">
+      <button class="chat-send" id="chatSend" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+      </button>
+    </div>
+  </div>
+
+</section>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+  // Clock
+  function updateClock() {
+    const now = new Date();
+    let h = now.getHours();
+    const m = now.getMinutes().toString().padStart(2, '0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    h = h === 0 ? 12 : h;
+    document.getElementById('clock').innerHTML =
+      h + '<span class="colon">:</span>' + m + ' <span class="ampm">' + ampm + '</span>';
+  }
+  updateClock();
+  setInterval(updateClock, 1000 * 10);
+
+  // Shared real-time connection state — declared early so both the player
+  // (playlist sync) and the chat UI can safely reference it regardless of
+  // which section of the script runs first.
+  const myId = Math.random().toString(36).slice(2, 9);
+  let socket = null;
+  let currentRoom = null;
+
+  // Drag-and-drop background media (image, gif, video)
+  const hero = document.getElementById('hero');
+  const bgVideo = document.getElementById('bgVideo');
+  let dragCounter = 0;
+
+  function setImageBackground(url) {
+    bgVideo.classList.remove('active');
+    bgVideo.pause();
+    bgVideo.removeAttribute('src');
+    hero.classList.remove('video-active');
+    hero.style.backgroundImage = 'url("' + url + '")';
+  }
+
+  function setVideoBackground(url) {
+    hero.classList.add('video-active');
+    bgVideo.src = url;
+    bgVideo.classList.add('active');
+    bgVideo.play().catch(() => { /* autoplay may need a user gesture on some browsers */ });
+  }
+
+  function handleDroppedFile(file) {
+    if (!file || !file.type) return;
+    const url = URL.createObjectURL(file);
+    if (file.type.startsWith('video/')) {
+      setVideoBackground(url);
+    } else if (file.type.startsWith('image/')) {
+      // Covers static images and animated GIFs alike — both render fine as a CSS background-image.
+      setImageBackground(url);
+    }
+  }
+
+  hero.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    hero.classList.add('drag-over');
+  });
+
+  hero.addEventListener('dragover', (e) => {
+    e.preventDefault();
+  });
+
+  hero.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      hero.classList.remove('drag-over');
+    }
+  });
+
+  hero.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    hero.classList.remove('drag-over');
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) {
+      handleDroppedFile(file);
+      return;
+    }
+    // Fallback: an image dragged in from another browser tab (no File, just a URL/HTML payload).
+    const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+    if (url) setImageBackground(url);
+  });
+  // The video is rendered off-screen (1x1, opacity 0); only audio is used.
+  const playBtn = document.getElementById('playBtn');
+  const playIcon = document.getElementById('playIcon');
+  const nextBtn = document.getElementById('nextBtn');
+  const playerArt = document.getElementById('playerArt');
+  const progressFill = document.getElementById('progressFill');
+  const progressTrack = document.getElementById('progressTrack');
+  const trackTitle = document.getElementById('trackTitle');
+  const playlistUrlInput = document.getElementById('playlistUrl');
+  const loadBtn = document.getElementById('loadBtn');
+
+  const pauseSVG = '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>';
+  const playSVG = '<path d="M8 5v14l11-7z"/>';
+
+  let ytPlayer = null;
+  let ytReady = false;
+  let progressInterval = null;
+  let pendingPlaylistId = null;
+  let lastLoadedPlaylistUrl = null;
+
+  function extractPlaylistId(url) {
+    try {
+      const u = new URL(url.trim());
+      const list = u.searchParams.get('list');
+      if (list) return list;
+    } catch (e) {
+      // not a valid URL — fall through
+    }
+    return null;
+  }
+
+  // Loads the IFrame API script once, on first use.
+  function loadYouTubeAPI() {
+    if (window.YT && window.YT.Player) {
+      onYouTubeIframeAPIReady();
+      return;
+    }
+    if (document.getElementById('yt-iframe-api')) return; // already loading
+    const tag = document.createElement('script');
+    tag.id = 'yt-iframe-api';
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.onerror = () => {
+      trackTitle.textContent = 'Could not reach YouTube (network blocked?)';
+    };
+    document.head.appendChild(tag);
+
+    // Fallback: if the API script never calls back, don't hang forever.
+    setTimeout(() => {
+      if (!ytReady) {
+        trackTitle.textContent = 'YouTube blocked in this preview — open the file directly in a browser tab.';
+      }
+    }, 4000);
+  };
+
+  window.onYouTubeIframeAPIReady = function () {
+    ytPlayer = new YT.Player('ytPlayer', {
+      height: '1',
+      width: '1',
+      playerVars: { autoplay: 0, controls: 0 },
+      events: {
+        onReady: () => {
+          ytReady = true;
+          if (pendingPlaylistId) startPlaylist(pendingPlaylistId);
+        },
+        onStateChange: onPlayerStateChange,
+        onError: (e) => {
+          const codes = { 2: 'Invalid video/playlist', 5: 'Playback error', 100: 'Video not found', 101: 'Playback restricted by owner', 150: 'Playback restricted by owner' };
+          trackTitle.textContent = codes[e.data] || 'Playback error (code ' + e.data + ')';
+        }
+      }
+    });
+  };
+
+  function startPlaylist(playlistId) {
+    trackTitle.textContent = 'Loading playlist...';
+    ytPlayer.loadPlaylist({ list: playlistId, listType: 'playlist', index: 0 });
+    playBtn.disabled = false;
+    nextBtn.disabled = false;
+    // loadPlaylist auto-starts playback in most browsers; if it doesn't
+    // (autoplay policies), the user just taps play once explicitly.
+  }
+
+  function refreshTitle(attempt) {
+    attempt = attempt || 0;
+    const data = ytPlayer.getVideoData();
+    if (data && data.title) {
+      trackTitle.textContent = data.title;
+    } else if (attempt < 5) {
+      // Title metadata can arrive a beat after PLAYING fires — retry briefly.
+      setTimeout(() => refreshTitle(attempt + 1), 400);
+    } else {
+      trackTitle.textContent = 'Now playing';
+    }
+  }
+
+  function onPlayerStateChange(event) {
+    const playing = event.data === YT.PlayerState.PLAYING;
+    playIcon.innerHTML = playing ? pauseSVG : playSVG;
+    playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    playerArt.classList.toggle('spinning', playing);
+
+    if (playing) {
+      refreshTitle();
+      clearInterval(progressInterval);
+      progressInterval = setInterval(updateProgress, 500);
+    } else {
+      clearInterval(progressInterval);
+    }
+  }
+
+  function updateProgress() {
+    if (!ytPlayer || typeof ytPlayer.getDuration !== 'function') return;
+    const duration = ytPlayer.getDuration();
+    const current = ytPlayer.getCurrentTime();
+    if (duration > 0) {
+      progressFill.style.width = ((current / duration) * 100) + '%';
+    }
+  }
+
+  function loadPlaylistFromUrl(url, fromSync) {
+    const id = extractPlaylistId(url);
+    if (!id) {
+      trackTitle.textContent = 'Enter a valid playlist URL';
+      return;
+    }
+    lastLoadedPlaylistUrl = url;
+    playlistUrlInput.value = url;
+    trackTitle.textContent = 'Loading playlist...';
+    if (ytReady) {
+      startPlaylist(id);
+    } else {
+      pendingPlaylistId = id;
+      loadYouTubeAPI();
+    }
+    // Only broadcast to the room when the user themself loaded it (not when
+    // we're the one applying an incoming sync), so it doesn't echo forever.
+    if (!fromSync && socketReadyForBroadcast()) {
+      window.__lastPlaylistToBroadcast = url;
+      broadcastPlaylistIfConnected(url);
+    }
+  }
+
+  function socketReadyForBroadcast() {
+    return typeof socket !== 'undefined' && socket && socket.readyState === WebSocket.OPEN;
+  }
+
+  function broadcastPlaylistIfConnected(url) {
+    if (socketReadyForBroadcast()) {
+      socket.send(JSON.stringify({ kind: 'playlist', url: url, senderId: myId }));
+    }
+  }
+
+  loadBtn.addEventListener('click', () => loadPlaylistFromUrl(playlistUrlInput.value));
+
+  playlistUrlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loadPlaylistFromUrl(playlistUrlInput.value);
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (!ytPlayer || !ytReady) {
+      trackTitle.textContent = 'Still connecting to YouTube...';
+      return;
+    }
+    const state = ytPlayer.getPlayerState();
+    if (state === YT.PlayerState.PLAYING) {
+      ytPlayer.pauseVideo();
+    } else {
+      ytPlayer.playVideo();
+    }
+  });
+
+  nextBtn.addEventListener('click', () => {
+    if (!ytPlayer || !ytReady) {
+      trackTitle.textContent = 'Still connecting to YouTube...';
+      return;
+    }
+    ytPlayer.nextVideo();
+  });
+
+  progressTrack.addEventListener('click', (e) => {
+    if (!ytPlayer || typeof ytPlayer.getDuration !== 'function') return;
+    const duration = ytPlayer.getDuration();
+    if (!duration) return;
+    const rect = progressTrack.getBoundingClientRect();
+    const pct = (e.clientX - rect.left) / rect.width;
+    ytPlayer.seekTo(duration * pct, true);
+  });
+
+  // Load the default playlist automatically so the lobby has music playing
+  // as soon as someone connects.
+  loadPlaylistFromUrl(playlistUrlInput.value);
+
+  // Real-time chat — messages relay live over a WebSocket, never stored anywhere.
+  // Everyone who joins "lobby" (the default) shares one public room.
+  // Typing any other room name creates a private room only people with that
+  // exact name can join.
+  const chatFab = document.getElementById('chatFab');
+  const chatPopup = document.getElementById('chatPopup');
+  const chatClose = document.getElementById('chatClose');
+  const chatInput = document.getElementById('chatInput');
+  const chatSend = document.getElementById('chatSend');
+  const chatBody = document.getElementById('chatBody');
+  const chatStatus = document.getElementById('chatStatus');
+  const roomInput = document.getElementById('roomInput');
+  const roomJoinBtn = document.getElementById('roomJoinBtn');
+
+  function addMessage(text, mine) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + (mine ? 'me' : 'them');
+    div.textContent = text;
+    chatBody.appendChild(div);
+    chatBody.scrollTop = chatBody.scrollHeight;
+  }
+
+  function addSystemNote(text) {
+    const div = document.createElement('div');
+    div.style.cssText = 'align-self:center; font-size:11px; color:rgba(240,235,228,0.4); margin:2px 0;';
+    div.textContent = text;
+    chatBody.appendChild(div);
+    chatBody.scrollTop = chatBody.scrollHeight;
+  }
+
+  function setStatus(text, online) {
+    chatStatus.textContent = text;
+    chatStatus.classList.toggle('online', !!online);
+  }
+
+  function joinRoom(room, opts) {
+    opts = opts || {};
+    if (!room) return;
+    if (socket) socket.close();
+    currentRoom = room;
+    if (!opts.silent) chatBody.innerHTML = '';
+    setStatus('connecting...', false);
+
+    // Free public relay — messages pass through live and are never persisted.
+    // Swap this endpoint for your own WebSocket/Socket.IO server if you need
+    // guaranteed uptime beyond a free shared demo tier.
+    const wsUrl = 'wss://demo.piesocket.com/v3/' + encodeURIComponent(room) +
+      '?api_key=VCXCEuvhGcBDP7XhiJJUDvR1e1D3eiVzgZzHzkzr&notify_self=1';
+
+    socket = new WebSocket(wsUrl);
+    let announcedConnected = false;
+
+    // Fallback: if the relay never opens, tell the user instead of leaving
+    // the status stuck on "connecting..." forever.
+    const connectTimeout = setTimeout(() => {
+      if (socket && socket.readyState !== WebSocket.OPEN) {
+        setStatus('connection blocked', false);
+        addSystemNote('Chat relay unreachable in this preview — open the file directly in a browser tab.');
+      }
+    }, 4000);
+
+    socket.onopen = () => {
+      clearTimeout(connectTimeout);
+      announcedConnected = true;
+      const label = room === 'lobby' ? 'live in the public lobby' : 'live in "' + room + '"';
+      setStatus(label, true);
+      if (!opts.silent) {
+        addSystemNote(room === 'lobby' ? 'Connected to the public lobby.' : 'Connected to private room "' + room + '".');
+      }
+      // If the room creator is loading a specific playlist, broadcast it so
+      // anyone else joining this same room hears the same thing.
+      if (opts.broadcastPlaylist) {
+        socket.send(JSON.stringify({ kind: 'playlist', url: opts.broadcastPlaylist, senderId: myId }));
+      } else if (!opts.silent) {
+        // Ask the room whether a playlist is already playing, so a fresh
+        // joiner can sync to it.
+        socket.send(JSON.stringify({ kind: 'playlist-request', senderId: myId }));
+      }
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.kind === 'playlist') {
+          if (data.senderId !== myId) {
+            loadPlaylistFromUrl(data.url, true);
+            addSystemNote('Playlist synced from room.');
+          }
+        } else if (data.kind === 'playlist-request') {
+          // Someone new joined — if we already have a playlist loaded, share it.
+          if (data.senderId !== myId && lastLoadedPlaylistUrl) {
+            socket.send(JSON.stringify({ kind: 'playlist', url: lastLoadedPlaylistUrl, senderId: myId }));
+          }
+        } else if (data.text) {
+          addMessage(data.text, data.senderId === myId);
+        }
+      } catch (e) {
+        // ignore malformed payloads
+      }
+    };
+
+    socket.onclose = () => {
+      clearTimeout(connectTimeout);
+      setStatus('disconnected — reconnecting...', false);
+      // The free relay can drop connections unexpectedly. Auto-retry a few
+      // times so a brief hiccup doesn't require the user to notice and
+      // manually rejoin.
+      if (currentRoom === room && (opts.retryCount || 0) < 5) {
+        setTimeout(() => {
+          if (currentRoom === room) {
+            joinRoom(room, Object.assign({}, opts, { retryCount: (opts.retryCount || 0) + 1, silent: true }));
+          }
+        }, 1500);
+      } else if ((opts.retryCount || 0) >= 5) {
+        setStatus('disconnected', false);
+        addSystemNote('Lost the connection after several attempts. Tap Join to try again.');
+      }
+    };
+
+    socket.onerror = () => {
+      if (!announcedConnected) {
+        setStatus('connection error', false);
+      }
+    };
+  }
+
+  roomJoinBtn.addEventListener('click', () => joinRoom(roomInput.value.trim() || 'lobby'));
+  roomInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(roomInput.value.trim() || 'lobby'); });
+
+  function sendMessage() {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      addSystemNote('Not connected — join a room first.');
+      return;
+    }
+    socket.send(JSON.stringify({ text: text, senderId: myId }));
+    chatInput.value = '';
+  }
+  chatSend.addEventListener('click', sendMessage);
+  chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+  // Auto-join the public lobby on first open.
+  let chatStarted = false;
+  chatFab.addEventListener('click', () => {
+    chatPopup.classList.toggle('open');
+    if (!chatStarted) {
+      chatStarted = true;
+      joinRoom('lobby');
+    }
+  });
+  chatClose.addEventListener('click', () => chatPopup.classList.remove('open'));
+</script>
+
+</body>
+</html>
