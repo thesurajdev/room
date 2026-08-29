@@ -590,30 +590,68 @@
   const hero = document.getElementById('hero');
   const bgVideo = document.getElementById('bgVideo');
   let dragCounter = 0;
+  let currentCustomBgUrl = null; // tracks the last custom image bg, for syncing to newly-joined peers
 
-  function setImageBackground(url) {
+  function setImageBackground(url, fromSync) {
     bgVideo.classList.remove('active');
     bgVideo.pause();
     bgVideo.removeAttribute('src');
     hero.classList.remove('video-active');
     hero.style.backgroundImage = 'url("' + url + '")';
+    currentCustomBgUrl = url;
+    if (!fromSync && connections.size > 0) {
+      broadcast({ kind: 'bg-sync', type: 'image', url: url });
+    }
   }
 
-  function setVideoBackground(url) {
+  function setVideoBackground(url, fromSync) {
     hero.classList.add('video-active');
     bgVideo.src = url;
     bgVideo.classList.add('active');
     bgVideo.play().catch(() => { /* autoplay may need a user gesture on some browsers */ });
+    if (!fromSync && connections.size > 0) {
+      broadcast({ kind: 'bg-sync', type: 'video', url: url });
+    }
+  }
+
+  // Converts a dropped File into a data URL so it can be sent over the
+  // WebRTC data channel to peers (blob: URLs are only valid in the tab
+  // that created them, so they can't be shared as-is).
+  function fileToDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
   }
 
   function handleDroppedFile(file) {
     if (!file || !file.type) return;
-    const url = URL.createObjectURL(file);
-    if (file.type.startsWith('video/')) {
-      setVideoBackground(url);
-    } else if (file.type.startsWith('image/')) {
-      // Covers static images and animated GIFs alike — both render fine as a CSS background-image.
-      setImageBackground(url);
+    const isVideo = file.type.startsWith('video/');
+    const isImage = file.type.startsWith('image/');
+    if (!isVideo && !isImage) return;
+
+    // Use a local blob URL immediately for a snappy local preview...
+    const localUrl = URL.createObjectURL(file);
+    if (isVideo) setVideoBackground(localUrl, true); else setImageBackground(localUrl, true);
+
+    // ...then, if we're in a room, convert to a data URL and broadcast that,
+    // since blob: URLs don't work across tabs/peers.
+    if (connections.size > 0) {
+      fileToDataURL(file).then((dataUrl) => {
+        broadcast({ kind: 'bg-sync', type: isVideo ? 'video' : 'image', url: dataUrl });
+      }).catch(() => {
+        addSystemNote('Could not sync background to the room (file too large?).');
+      });
+    }
+  }
+
+  function applyIncomingBgSync(data) {
+    if (data.type === 'video') {
+      setVideoBackground(data.url, true);
+    } else {
+      setImageBackground(data.url, true);
     }
   }
 
@@ -786,7 +824,7 @@
     // Only broadcast to connected peers when the user themself loaded it
     // (not when we're the one applying an incoming sync), so it doesn't
     // echo forever between peers.
-    if (!fromSync && typeof broadcast === 'function' && typeof connections !== 'undefined' && connections.size > 0) {
+    if (!fromSync && connections.size > 0) {
       broadcast({ kind: 'playlist-sync', url: url, time: 0, playing: true });
     }
   }
@@ -807,7 +845,7 @@
       if (ytPlayer && ytReady && typeof ytPlayer.seekTo === 'function' && ytPlayer.getDuration() > 0) {
         ytPlayer.seekTo(data.time, true);
         if (data.playing) ytPlayer.playVideo(); else ytPlayer.pauseVideo();
-      } else if (attempt < 10) {
+      } else if (attempt < 12) {
         setTimeout(() => trySeek(attempt + 1), 500);
       }
     };
@@ -916,17 +954,7 @@
     connections.add(conn);
     conn.on('open', () => {
       updateStatus();
-      // Sync the newly connected peer to whatever is currently playing,
-      // including the exact playback position so both sides hear the
-      // same moment of the song, not just the same playlist.
-      if (lastLoadedPlaylistUrl && ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
-        conn.send({
-          kind: 'playlist-sync',
-          url: lastLoadedPlaylistUrl,
-          time: ytPlayer.getCurrentTime(),
-          playing: ytPlayer.getPlayerState() === YT.PlayerState.PLAYING
-        });
-      }
+      sendCurrentStateTo(conn);
     });
     conn.on('data', (data) => handleIncomingData(data, conn));
     conn.on('close', () => {
@@ -937,6 +965,38 @@
       connections.delete(conn);
       updateStatus();
     });
+  }
+
+  // Sends whatever we currently know (playlist position + background) to a
+  // single newly-joined peer. Retries briefly if the YouTube player or
+  // background state isn't ready yet, so a peer that joins early doesn't
+  // miss the sync.
+  function sendCurrentStateTo(conn, attempt) {
+    attempt = attempt || 0;
+    if (!conn.open) return;
+
+    if (lastLoadedPlaylistUrl) {
+      const ytIsReady = ytPlayer && ytReady && typeof ytPlayer.getCurrentTime === 'function' && typeof ytPlayer.getDuration === 'function' && ytPlayer.getDuration() > 0;
+      if (ytIsReady) {
+        conn.send({
+          kind: 'playlist-sync',
+          url: lastLoadedPlaylistUrl,
+          time: ytPlayer.getCurrentTime(),
+          playing: ytPlayer.getPlayerState() === YT.PlayerState.PLAYING
+        });
+      } else if (attempt < 12) {
+        setTimeout(() => sendCurrentStateTo(conn, attempt + 1), 500);
+      }
+    }
+
+    // Background sync: send whatever is currently showing, once.
+    if (attempt === 0) {
+      if (hero.classList.contains('video-active') && bgVideo.src) {
+        conn.send({ kind: 'bg-sync', type: 'video', url: bgVideo.src });
+      } else if (currentCustomBgUrl) {
+        conn.send({ kind: 'bg-sync', type: 'image', url: currentCustomBgUrl });
+      }
+    }
   }
 
   function handleIncomingData(data, conn) {
@@ -953,6 +1013,9 @@
       if (ytPlayer) {
         if (data.playing) ytPlayer.playVideo(); else ytPlayer.pauseVideo();
       }
+      if (isHost) broadcast(data, conn);
+    } else if (data.kind === 'bg-sync') {
+      applyIncomingBgSync(data);
       if (isHost) broadcast(data, conn);
     } else if (data.text) {
       addMessage(data.text, false);
