@@ -325,7 +325,7 @@
   .progress-fill {
     position: absolute;
     left: 0; top: 0; bottom: 0;
-    width: 30%;
+    width: 0%;
     border-radius: 2px;
     background: linear-gradient(90deg, #d87a3a, #e8a15f);
   }
@@ -1165,7 +1165,16 @@
   let progressInterval = null;
   let pendingRef = null; // { type: 'playlist'|'video', id } — whichever load is waiting on the YouTube API to finish initializing
   let lastLoadedPlaylistUrl = null;
-  let lastPlaylistLoadedAt = 0; // timestamp of the newest playlist load we know about, used to reject stale/looped sync messages
+
+  // A monotonically increasing "version" for the playlist state, used to reject stale or
+  // looped sync messages. Seeded with a random offset (instead of starting at 0) so two
+  // independently opened tabs never collide on the exact same value. An earlier version of
+  // this used a raw Date.now() timestamp, but device clocks can be skewed (or simply tie
+  // when two tabs load the same default playlist at "the same" moment), which silently
+  // dropped legitimate syncs — including the very first catch-up sync sent to someone who
+  // just joined a room, which is what made the other person's song look "stuck".
+  let playlistSyncSeq = Date.now() + Math.floor(Math.random() * 100000);
+  let lastPlaylistLoadedAt = 0; // the seq value of the newest playlist state we know about
 
   // Pulls whichever YouTube reference the URL contains: a playlist id
   // (?list=...) or a single video id (watch?v=..., youtu.be/..., or
@@ -1244,6 +1253,16 @@
     });
   };
 
+  // Safe wrapper around getPlaylistIndex() — returns -1 (meaning "not applicable")
+  // instead of throwing if the player isn't in a playlist context or isn't ready yet.
+  function safeGetPlaylistIndex() {
+    try {
+      return (ytPlayer && typeof ytPlayer.getPlaylistIndex === 'function') ? ytPlayer.getPlaylistIndex() : -1;
+    } catch (e) {
+      return -1;
+    }
+  }
+
   function startPlaylist(playlistId) {
     trackTitle.textContent = 'Loading playlist...';
     // loadPlaylist can occasionally no-op if called while a video is still
@@ -1252,19 +1271,25 @@
     // takes over instead of silently continuing the old one.
     try { ytPlayer.stopVideo(); } catch (e) {}
     ytPlayer.loadPlaylist({ list: playlistId, listType: 'playlist', index: 0 });
+    // loadPlaylist is documented to auto-play, but that's inconsistent across
+    // browsers' autoplay-with-sound policies — explicitly requesting play here
+    // (still inside the original click/gesture call stack) makes it reliable,
+    // and is a no-op if it was already about to play anyway.
+    try { ytPlayer.playVideo(); } catch (e) {}
     playBtn.disabled = false;
     nextBtn.disabled = false;
-    // loadPlaylist auto-starts playback in most browsers; if it doesn't
-    // (autoplay policies), the user just taps play once explicitly.
+    refreshTitle();
   }
 
   function startSingleVideo(videoId) {
     trackTitle.textContent = 'Loading video...';
     try { ytPlayer.stopVideo(); } catch (e) {}
     ytPlayer.loadVideoById(videoId);
+    try { ytPlayer.playVideo(); } catch (e) {}
     playBtn.disabled = false;
     // No playlist context, so "next" has nothing to advance to.
     nextBtn.disabled = true;
+    refreshTitle();
   }
 
   function refreshTitle(attempt) {
@@ -1272,8 +1297,8 @@
     const data = ytPlayer.getVideoData();
     if (data && data.title) {
       trackTitle.textContent = data.title;
-    } else if (attempt < 5) {
-      // Title metadata can arrive a beat after PLAYING fires — retry briefly.
+    } else if (attempt < 8) {
+      // Title metadata can arrive a beat after load/PLAYING fires — retry briefly.
       setTimeout(() => refreshTitle(attempt + 1), 400);
     } else {
       trackTitle.textContent = 'Now playing';
@@ -1286,8 +1311,17 @@
     playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
     playerArt.classList.toggle('spinning', playing);
 
-    if (playing) {
+    // Title metadata can become available as soon as a video is cued or
+    // buffering, not only once it's actually PLAYING — refreshing on those
+    // states too means the track name updates promptly even when autoplay
+    // is blocked and playback hasn't visibly started yet. Previously this
+    // only refreshed on PLAYING, so a blocked-autoplay Load looked like
+    // nothing had happened at all.
+    if (playing || event.data === YT.PlayerState.CUED || event.data === YT.PlayerState.BUFFERING) {
       refreshTitle();
+    }
+
+    if (playing) {
       clearInterval(progressInterval);
       progressInterval = setInterval(updateProgress, 500);
     } else {
@@ -1304,7 +1338,7 @@
     }
   }
 
-  function loadPlaylistFromUrl(url, fromSync) {
+  function loadPlaylistFromUrl(url, fromSync, incomingSeq) {
     const ref = extractYouTubeRef(url);
     if (!ref) {
       trackTitle.textContent = 'Enter a valid YouTube video or playlist URL';
@@ -1313,55 +1347,83 @@
     lastLoadedPlaylistUrl = url;
     playlistUrlInput.value = url;
     trackTitle.textContent = ref.type === 'playlist' ? 'Loading playlist...' : 'Loading video...';
+    progressFill.style.width = '0%'; // clear stale progress left over from whatever was playing before
     if (ytReady) {
       if (ref.type === 'playlist') startPlaylist(ref.id); else startSingleVideo(ref.id);
     } else {
       pendingRef = ref;
       loadYouTubeAPI();
     }
-    // Stamp every load we originate with "now" so it's always treated as
-    // the newest thing we know about — this has to happen whether or not
-    // anyone is connected yet, otherwise a load made before joining a room
-    // keeps a stale/zero timestamp and can get silently rejected later as
-    // "not newer" once a sync from a peer arrives.
+    // Stamp every load we originate with a fresh seq value so it's always
+    // treated as the newest thing we know about — this has to happen whether
+    // or not anyone is connected yet, otherwise a load made before joining a
+    // room keeps a stale seq and can get silently rejected later as "not
+    // newer" once a sync from a peer arrives.
     if (!fromSync) {
-      lastPlaylistLoadedAt = Date.now();
+      playlistSyncSeq++;
+      lastPlaylistLoadedAt = playlistSyncSeq;
       // Only broadcast to connected peers when the user themself loaded it
       // (not when we're the one applying an incoming sync), so it doesn't
       // echo forever between peers.
       if (connections.size > 0) {
-        broadcast({ kind: 'playlist-sync', url: url, time: 0, playing: true, loadedAt: lastPlaylistLoadedAt });
+        broadcast({ kind: 'playlist-sync', url: url, time: 0, index: 0, playing: true, loadedAt: lastPlaylistLoadedAt });
       }
+    } else if (typeof incomingSeq === 'number' && incomingSeq > lastPlaylistLoadedAt) {
+      lastPlaylistLoadedAt = incomingSeq;
     }
   }
 
-  // Applies a playlist + exact timestamp received from another peer, so
-  // everyone in the room hears the same moment of the same song, not just
-  // the same playlist started independently.
+  // Applies a playlist + exact timestamp (and, for multi-track playlists, the
+  // exact track index) received from another peer, so everyone in the room
+  // hears the same moment of the same song, not just the same playlist
+  // started independently from track 1.
   function applyIncomingPlaylistSync(data) {
-    // Ignore anything older than (or equal to) the newest load we already
-    // know about — this is what stops a relayed/looped message from a
-    // moment ago from stomping back over a playlist you just changed to.
-    if (typeof data.loadedAt === 'number' && data.loadedAt <= lastPlaylistLoadedAt) {
-      return;
+    // Catch-up syncs (sent directly, once, to a single newly-joined connection
+    // by sendCurrentStateTo) are never relayed/looped, so they always apply —
+    // regardless of seq — instead of being silently dropped by the staleness
+    // check below, which exists only to guard the broadcast/relay path.
+    if (!data.catchup) {
+      // Ignore anything not newer than the newest load we already know about —
+      // this is what stops a relayed/looped message from a moment ago from
+      // stomping back over a playlist you (or someone else) just changed to.
+      if (typeof data.loadedAt === 'number' && data.loadedAt <= lastPlaylistLoadedAt) {
+        return;
+      }
     }
-    if (typeof data.loadedAt === 'number') lastPlaylistLoadedAt = data.loadedAt;
+    if (typeof data.loadedAt === 'number' && data.loadedAt > lastPlaylistLoadedAt) {
+      lastPlaylistLoadedAt = data.loadedAt;
+    }
 
     const isSamePlaylist = data.url === lastLoadedPlaylistUrl;
     if (!isSamePlaylist) {
-      loadPlaylistFromUrl(data.url, true);
+      loadPlaylistFromUrl(data.url, true, data.loadedAt);
       addSystemNote('Synced to room playlist.');
     }
+
+    const targetIndex = (typeof data.index === 'number' && data.index >= 0) ? data.index : null;
+
     // Wait for the player to actually be ready and playing before seeking,
-    // since a freshly loaded playlist takes a moment to start.
+    // since a freshly loaded playlist takes a moment to start. If the sync
+    // also names a specific track index (so a peer who joins mid-playlist
+    // lands on the same track the host is actually on, not track 1), switch
+    // to that track first and give it a beat to buffer before seeking within it.
     const trySeek = (attempt) => {
       attempt = attempt || 0;
-      if (ytPlayer && ytReady && typeof ytPlayer.seekTo === 'function' && ytPlayer.getDuration() > 0) {
-        ytPlayer.seekTo(data.time, true);
-        if (data.playing) ytPlayer.playVideo(); else ytPlayer.pauseVideo();
-      } else if (attempt < 12) {
-        setTimeout(() => trySeek(attempt + 1), 500);
+      const playerReady = ytPlayer && ytReady && typeof ytPlayer.seekTo === 'function' && ytPlayer.getDuration() > 0;
+      if (!playerReady) {
+        if (attempt < 12) setTimeout(() => trySeek(attempt + 1), 500);
+        return;
       }
+      const needsIndexSwitch = targetIndex !== null
+        && typeof ytPlayer.playVideoAt === 'function'
+        && safeGetPlaylistIndex() !== targetIndex;
+      if (needsIndexSwitch && attempt < 12) {
+        try { ytPlayer.playVideoAt(targetIndex); } catch (e) {}
+        setTimeout(() => trySeek(attempt + 1), 400);
+        return;
+      }
+      ytPlayer.seekTo(data.time, true);
+      if (data.playing) ytPlayer.playVideo(); else ytPlayer.pauseVideo();
     };
     trySeek();
   }
@@ -1389,6 +1451,11 @@
       return;
     }
     ytPlayer.nextVideo();
+    try { ytPlayer.playVideo(); } catch (e) {}
+    // This was previously never sent, so clicking Next only ever advanced the
+    // track locally — anyone else in the room stayed on the old song. Peers
+    // mirror this by calling nextVideo() on their own (already-synced) player.
+    if (connections.size > 0) broadcast({ kind: 'next' });
   });
 
   progressTrack.addEventListener('click', (e) => {
@@ -1405,7 +1472,7 @@
   // Load the default playlist locally so the player has something ready to
   // play — it will be overridden by a room sync automatically upon joining
   // a room where someone else is already playing something. Passed as a
-  // real (non-sync) load so it gets a proper timestamp; nothing broadcasts
+  // real (non-sync) load so it gets a proper seq value; nothing broadcasts
   // yet anyway since no one is connected at page load.
   loadPlaylistFromUrl(playlistUrlInput.value, false);
 
@@ -1525,7 +1592,9 @@
   // Sends whatever we currently know (playlist position + background) to a
   // single newly-joined peer. Retries briefly if the YouTube player or
   // background state isn't ready yet, so a peer that joins early doesn't
-  // miss the sync.
+  // miss the sync. Marked catchup:true so the receiving end always applies
+  // it (see applyIncomingPlaylistSync) instead of possibly discarding it as
+  // "not newer" than a seq value it happens to already hold.
   function sendCurrentStateTo(conn, attempt, epoch) {
     attempt = attempt || 0;
     if (epoch !== roomEpoch) return; // this room attempt was superseded — stop retrying
@@ -1538,8 +1607,10 @@
           kind: 'playlist-sync',
           url: lastLoadedPlaylistUrl,
           time: ytPlayer.getCurrentTime(),
+          index: safeGetPlaylistIndex(),
           playing: ytPlayer.getPlayerState() === YT.PlayerState.PLAYING,
-          loadedAt: lastPlaylistLoadedAt
+          loadedAt: lastPlaylistLoadedAt,
+          catchup: true
         });
       } else if (attempt < 12) {
         setTimeout(() => sendCurrentStateTo(conn, attempt + 1, epoch), 500);
@@ -1562,6 +1633,12 @@
     if (data.kind === 'playlist-sync') {
       applyIncomingPlaylistSync(data);
       if (isHost) broadcast(data, conn); // host relays to everyone else in the room
+    } else if (data.kind === 'next') {
+      if (ytPlayer && typeof ytPlayer.nextVideo === 'function') {
+        ytPlayer.nextVideo();
+        try { ytPlayer.playVideo(); } catch (e) {}
+      }
+      if (isHost) broadcast(data, conn);
     } else if (data.kind === 'seek') {
       if (ytPlayer && typeof ytPlayer.seekTo === 'function') {
         ytPlayer.seekTo(data.time, true);
