@@ -626,6 +626,29 @@
     });
   }
 
+  // PeerJS/WebRTC data channels are unreliable with very large single
+  // messages in some browsers (silent drop or corruption). Chunking a big
+  // data URL into small pieces and reassembling on the other end sidesteps
+  // that entirely, at the cost of a short transfer delay for big files.
+  const BG_CHUNK_SIZE = 16 * 1024; // 16KB per chunk
+  let bgChunkBuffer = {}; // transferId -> { chunks: [], total, type }
+  let bgTransferCounter = 0;
+
+  // sendFn lets this same chunking logic either broadcast to the whole
+  // room (new drop) or target a single newly-joined peer (catch-up sync).
+  function sendBgFileChunks(dataUrl, type, sendFn) {
+    const transferId = 'bg-' + Date.now() + '-' + (bgTransferCounter++);
+    const total = Math.ceil(dataUrl.length / BG_CHUNK_SIZE);
+    for (let i = 0; i < total; i++) {
+      const chunk = dataUrl.slice(i * BG_CHUNK_SIZE, (i + 1) * BG_CHUNK_SIZE);
+      sendFn({ kind: 'bg-chunk', transferId: transferId, type: type, index: i, total: total, chunk: chunk });
+    }
+  }
+
+  function broadcastBgFile(dataUrl, type) {
+    sendBgFileChunks(dataUrl, type, (msg) => broadcast(msg));
+  }
+
   function handleDroppedFile(file) {
     if (!file || !file.type) return;
     const isVideo = file.type.startsWith('video/');
@@ -636,14 +659,31 @@
     const localUrl = URL.createObjectURL(file);
     if (isVideo) setVideoBackground(localUrl, true); else setImageBackground(localUrl, true);
 
-    // ...then, if we're in a room, convert to a data URL and broadcast that,
-    // since blob: URLs don't work across tabs/peers.
+    // ...then, if we're in a room, convert to a data URL and broadcast it
+    // in chunks, since blob: URLs don't work across tabs/peers and large
+    // single messages can silently fail on the data channel.
     if (connections.size > 0) {
       fileToDataURL(file).then((dataUrl) => {
-        broadcast({ kind: 'bg-sync', type: isVideo ? 'video' : 'image', url: dataUrl });
+        broadcastBgFile(dataUrl, isVideo ? 'video' : 'image');
       }).catch(() => {
-        addSystemNote('Could not sync background to the room (file too large?).');
+        addSystemNote('Could not sync background to the room (could not read the file).');
       });
+    }
+  }
+
+  function handleIncomingBgChunk(data) {
+    let entry = bgChunkBuffer[data.transferId];
+    if (!entry) {
+      entry = bgChunkBuffer[data.transferId] = { chunks: new Array(data.total), received: 0, total: data.total, type: data.type };
+    }
+    if (entry.chunks[data.index] === undefined) {
+      entry.chunks[data.index] = data.chunk;
+      entry.received++;
+    }
+    if (entry.received === entry.total) {
+      const fullUrl = entry.chunks.join('');
+      delete bgChunkBuffer[data.transferId];
+      applyIncomingBgSync({ type: entry.type, url: fullUrl });
     }
   }
 
@@ -989,12 +1029,13 @@
       }
     }
 
-    // Background sync: send whatever is currently showing, once.
+    // Background sync: send whatever is currently showing, once, chunked
+    // (a raw single-message send of a large data URL can silently fail).
     if (attempt === 0) {
       if (hero.classList.contains('video-active') && bgVideo.src) {
-        conn.send({ kind: 'bg-sync', type: 'video', url: bgVideo.src });
+        sendBgFileChunks(bgVideo.src, 'video', (msg) => conn.send(msg));
       } else if (currentCustomBgUrl) {
-        conn.send({ kind: 'bg-sync', type: 'image', url: currentCustomBgUrl });
+        sendBgFileChunks(currentCustomBgUrl, 'image', (msg) => conn.send(msg));
       }
     }
   }
@@ -1017,6 +1058,9 @@
     } else if (data.kind === 'bg-sync') {
       applyIncomingBgSync(data);
       if (isHost) broadcast(data, conn);
+    } else if (data.kind === 'bg-chunk') {
+      handleIncomingBgChunk(data);
+      if (isHost) broadcast(data, conn); // relay each chunk as-is to other room members
     } else if (data.text) {
       addMessage(data.text, false);
       if (isHost) broadcast(data, conn);
