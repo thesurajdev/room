@@ -2,10 +2,42 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hero Section</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Room — Listen Together, Chat Live</title>
+<meta name="description" content="Room is a free shared space to listen to music together, chat in real time, and set a custom background — no sign-up required. Create a room, share the code, and hang out with someone anywhere.">
+<meta name="keywords" content="room, watch together, listen together, sync music, real-time chat, shared playlist, virtual hangout, no signup chat">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://thesurajdev.github.io/room/">
+
+<!-- Open Graph / social sharing -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Room — Listen Together, Chat Live">
+<meta property="og:description" content="A free shared space to sync music, chat live, and set a custom background together. No sign-up, just a room code.">
+<meta property="og:url" content="https://thesurajdev.github.io/room/">
+<meta property="og:site_name" content="Room">
+
+<!-- Twitter card -->
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Room — Listen Together, Chat Live">
+<meta name="twitter:description" content="A free shared space to sync music, chat live, and set a custom background together. No sign-up, just a room code.">
+
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* visible to screen readers and search engines, not shown on screen —
+     the design is intentionally minimal/wordless, but the page still
+     needs a real heading for SEO and accessibility */
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
   html, body {
     height: 100%;
@@ -18,6 +50,7 @@
   .hero {
     position: relative;
     height: 100vh;
+    height: 100dvh; /* accounts for mobile browser chrome (address bar) so the hero doesn't get cut off or leave a gap */
     width: 100%;
     overflow: hidden;
     background-image: url("https://images.unsplash.com/photo-1519681393784-d120267933ba?q=80&w=2000&auto=format&fit=crop");
@@ -91,6 +124,28 @@
   }
 
   .drop-hint-inner svg { width: 30px; height: 30px; }
+
+  /* ---- Background upload button (works for both drag-and-drop-less touch devices and desktop) ---- */
+  .bg-upload-btn {
+    position: absolute;
+    top: 24px;
+    right: 28px;
+    z-index: 5;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(20,18,24,0.5);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: rgba(240,235,228,0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .bg-upload-btn svg { width: 19px; height: 19px; }
+  .bg-upload-btn:hover { background: rgba(28,25,32,0.65); }
 
   /* ---- Clock ---- */
   .clock {
@@ -259,6 +314,14 @@
     cursor: pointer;
   }
 
+  /* Invisible padded hit area so the thin 3px bar is still easy to tap accurately on touch */
+  .progress-track::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0;
+    top: -12px; bottom: -12px;
+  }
+
   .progress-fill {
     position: absolute;
     left: 0; top: 0; bottom: 0;
@@ -299,7 +362,7 @@
     z-index: 7;
     width: min(320px, calc(100vw - 48px));
     height: 400px;
-    max-height: calc(100vh - 140px);
+    max-height: calc(100dvh - 140px);
     background: rgba(18,16,22,0.85);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -319,6 +382,24 @@
     opacity: 1;
     transform: translateY(0) scale(1);
     pointer-events: auto;
+  }
+
+  /* Fullscreen mode: applied on top of .open via JS on small screens, so
+     chat takes over the whole viewport instead of a small floating card
+     that's cramped and easy to fat-finger-close on mobile. */
+  .chat-popup.fullscreen {
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    transform: none;
+  }
+  .chat-popup.fullscreen.open {
+    transform: none;
   }
 
   .chat-header {
@@ -478,15 +559,68 @@
 
   @media (max-width: 520px) {
     .clock { top: 18px; left: 18px; font-size: 17px; }
-    .chat-fab { bottom: 20px; right: 20px; }
-    .player { bottom: 20px; }
-    .chat-popup { right: 20px; bottom: 84px; }
+
+    /* Player: shrink padding, let the URL row wrap, keep touch targets >=40px */
+    .player {
+      bottom: 16px;
+      left: 12px;
+      right: 12px;
+      transform: none;
+      width: auto;
+      padding: 10px 12px;
+    }
+    .player-top { gap: 8px; }
+    .player-art { width: 36px; height: 36px; }
+    .play-btn, .next-btn { width: 40px; height: 40px; }
+    .track-title { font-size: 12px; }
+    .player-url-row input { font-size: 16px; } /* 16px prevents iOS auto-zoom on focus */
+    .load-btn { padding: 9px 14px; font-size: 13px; }
+
+    /* Upload + chat icons sit side by side in one row on mobile, same size */
+    .bg-upload-btn { top: 16px; right: 68px; width: 44px; height: 44px; }
+    .chat-fab {
+      top: 16px;
+      bottom: auto;
+      right: 16px;
+      width: 44px;
+      height: 44px;
+    }
+    .chat-fab svg { width: 19px; height: 19px; }
+    .chat-popup {
+      left: 12px;
+      right: 12px;
+      top: calc(16px + 44px + 12px);
+      bottom: auto;
+      width: auto;
+      height: min(60vh, 460px);
+      max-height: calc(100dvh - 16px - 44px - 24px);
+    }
+    .chat-room-row input,
+    .chat-input-row input { font-size: 16px; } /* prevents iOS auto-zoom on focus */
+    .chat-send { width: 38px; height: 38px; }
+
+    /* Room code + Join + Copy link can crowd a narrow screen; wrap instead of squeezing */
+    .chat-room-row { flex-wrap: wrap; }
+    .chat-room-row input { flex-basis: 100%; }
+    .chat-room-row .load-btn { flex: 1; }
+
+    /* Drop-to-upload doesn't exist on touch; swap in a tap-to-upload hint instead */
+    .drop-hint-inner { padding: 24px 28px; font-size: 13px; }
+  }
+
+  /* Very small phones (older iPhones, small Android) */
+  @media (max-width: 360px) {
+    .player-url-row { flex-wrap: wrap; }
+    .player-url-row input { width: 100%; }
+    .load-btn { width: 100%; }
   }
 </style>
 </head>
 <body>
 
 <section class="hero" id="hero">
+
+  <h1 class="visually-hidden">Room — listen to music together, chat live, and set a shared background</h1>
 
   <video class="bg-video" id="bgVideo" autoplay loop muted playsinline></video>
 
@@ -499,6 +633,15 @@
       <span>Drop an image, GIF, or video</span>
     </div>
   </div>
+
+  <input type="file" id="bgFileInput" accept="image/*,video/*" style="display:none;">
+  <button class="bg-upload-btn" id="bgUploadBtn" aria-label="Change background">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="5" width="18" height="14" rx="2"/>
+      <circle cx="8.5" cy="10.5" r="1.5"/>
+      <path d="M21 15l-4.5-4.5a1.5 1.5 0 0 0-2.1 0L4 21"/>
+    </svg>
+  </button>
 
   <div class="clock" id="clock">--:-- <span class="ampm" id="ampm">--</span></div>
 
@@ -544,6 +687,7 @@
     <div class="chat-room-row">
       <input type="text" id="roomInput" placeholder="Room code (share with the other person)">
       <button class="load-btn" id="roomJoinBtn">Join</button>
+      <button class="load-btn" id="copyLinkBtn" title="Copy shareable invite link" aria-label="Copy invite link" style="display:none;">Copy link</button>
     </div>
     <div class="chat-body" id="chatBody"></div>
     <div class="chat-input-row">
@@ -727,6 +871,19 @@
     const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
     if (url) setImageBackground(url);
   });
+
+  // Tap-to-upload: the only realistic way to change the background on a
+  // touch device, since drag-and-drop has no equivalent gesture there.
+  // Also handy on desktop for anyone who doesn't think to try dragging a file in.
+  const bgUploadBtn = document.getElementById('bgUploadBtn');
+  const bgFileInput = document.getElementById('bgFileInput');
+  bgUploadBtn.addEventListener('click', () => bgFileInput.click());
+  bgFileInput.addEventListener('change', () => {
+    const file = bgFileInput.files && bgFileInput.files[0];
+    if (file) handleDroppedFile(file);
+    bgFileInput.value = ''; // allow re-selecting the same file later
+  });
+
   // The video is rendered off-screen (1x1, opacity 0); only audio is used.
   const playBtn = document.getElementById('playBtn');
   const playIcon = document.getElementById('playIcon');
@@ -952,6 +1109,7 @@
   const chatStatus = document.getElementById('chatStatus');
   const roomInput = document.getElementById('roomInput');
   const roomJoinBtn = document.getElementById('roomJoinBtn');
+  const copyLinkBtn = document.getElementById('copyLinkBtn');
 
   function addMessage(text, mine) {
     const div = document.createElement('div');
@@ -1112,10 +1270,51 @@
     setStatus('connecting...', false);
     addSystemNote('Joining room "' + code + '"...');
     joinHost(roomToPeerId(code));
+
+    // Reflect the room code in the URL (without reloading the page) so the
+    // current tab's address bar becomes a shareable link straight into
+    // this room for anyone else who opens it.
+    const url = new URL(window.location.href);
+    url.searchParams.set('room', code);
+    window.history.replaceState({}, '', url);
+    roomInput.value = code;
+    copyLinkBtn.style.display = '';
   }
 
   roomJoinBtn.addEventListener('click', () => joinRoom(roomInput.value));
   roomInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(roomInput.value); });
+
+  copyLinkBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      const original = copyLinkBtn.textContent;
+      copyLinkBtn.textContent = 'Copied!';
+      setTimeout(() => { copyLinkBtn.textContent = original; }, 1500);
+    } catch (err) {
+      // Clipboard API can be blocked (permissions, non-HTTPS, etc.) — fall
+      // back to showing the link in the chat so it can be copied by hand.
+      addSystemNote('Copy this link to invite: ' + window.location.href);
+    }
+  });
+
+  // Auto-join if the page was opened with ?room=CODE in the URL — this is
+  // what makes the link actually shareable: the other person just opens it
+  // and lands straight in the room instead of typing the code by hand.
+  (function joinFromUrlIfPresent() {
+    const params = new URLSearchParams(window.location.search);
+    const roomFromUrl = params.get('room');
+    if (roomFromUrl) {
+      roomInput.value = roomFromUrl;
+      joinRoom(roomFromUrl);
+      // Auto-open the chat panel too, since arriving via a shared link
+      // implies the person wants to be in the room, not just viewing it.
+      chatPopup.classList.add('open');
+      if (isMobileViewport()) {
+        chatPopup.classList.add('fullscreen');
+        document.body.style.overflow = 'hidden';
+      }
+    }
+  })();
 
   function sendMessage() {
     const text = chatInput.value.trim();
@@ -1134,8 +1333,29 @@
   }
   chatSend.addEventListener('click', sendMessage);
   chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
-  chatFab.addEventListener('click', () => chatPopup.classList.toggle('open'));
-  chatClose.addEventListener('click', () => chatPopup.classList.remove('open'));
+  // Fullscreen chat on small screens: a floating card is too cramped on a
+  // phone and easy to close by mistake, so chat takes the whole viewport
+  // instead. Re-checked on open (not just at load) in case of orientation
+  // change or a resized window.
+  function isMobileViewport() {
+    return window.innerWidth <= 520;
+  }
+
+  chatFab.addEventListener('click', () => {
+    const opening = !chatPopup.classList.contains('open');
+    chatPopup.classList.toggle('fullscreen', opening && isMobileViewport());
+    chatPopup.classList.toggle('open');
+    if (opening && isMobileViewport()) {
+      // Avoid the page scrolling/bouncing behind a fullscreen overlay.
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+  });
+  chatClose.addEventListener('click', () => {
+    chatPopup.classList.remove('open', 'fullscreen');
+    document.body.style.overflow = '';
+  });
 </script>
 
 </body>
