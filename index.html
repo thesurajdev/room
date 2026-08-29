@@ -1246,6 +1246,11 @@
 
   function startPlaylist(playlistId) {
     trackTitle.textContent = 'Loading playlist...';
+    // loadPlaylist can occasionally no-op if called while a video is still
+    // actively playing from a previous session (a known YouTube IFrame API
+    // quirk) — stopping playback first guarantees the new playlist actually
+    // takes over instead of silently continuing the old one.
+    try { ytPlayer.stopVideo(); } catch (e) {}
     ytPlayer.loadPlaylist({ list: playlistId, listType: 'playlist', index: 0 });
     playBtn.disabled = false;
     nextBtn.disabled = false;
@@ -1255,6 +1260,7 @@
 
   function startSingleVideo(videoId) {
     trackTitle.textContent = 'Loading video...';
+    try { ytPlayer.stopVideo(); } catch (e) {}
     ytPlayer.loadVideoById(videoId);
     playBtn.disabled = false;
     // No playlist context, so "next" has nothing to advance to.
