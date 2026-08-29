@@ -620,6 +620,14 @@
     border-bottom-left-radius: 4px;
   }
 
+  .msg-name {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    color: #e8a15f;
+    margin-bottom: 3px;
+  }
+
   .msg.me {
     align-self: flex-end;
     background: linear-gradient(135deg, #d87a3a, #b85c2e);
@@ -870,15 +878,95 @@
   let isHost = false;
   let currentRoomCode = null;
   let myPeerId = null; // this tab's own PeerJS id, so we can refuse to connect to ourselves
+  let myName = 'You'; // random per-session display name, assigned once we know myPeerId
   let roomEpoch = 0;   // bumped every time joinRoom() runs, so stale async callbacks
                         // (retries, timeouts, in-flight chunk transfers) from a previous
                         // connection attempt can detect they're outdated and bail out
                         // instead of corrupting the current one.
 
+  // ---- Per-session random display names ----
+  // Everyone in a room gets a unique-feeling "Adjective Animal" name derived
+  // from their PeerJS id, so a room with more than two people can actually
+  // tell who said what. Deterministic (same id always maps to the same
+  // name for everyone in the room) but effectively random-looking, and
+  // resets to a brand new name every time a fresh peer id is created
+  // (i.e. every new tab/session).
+  const NAME_ADJECTIVES = ['Amber','Azure','Bold','Bright','Calm','Clever','Cosmic','Crimson','Dapper','Daring','Dusty','Electric','Foggy','Gentle','Golden','Happy','Hidden','Icy','Jolly','Keen','Lively','Lucky','Mellow','Misty','Neon','Nimble','Noble','Playful','Quiet','Quick','Rusty','Sandy','Sharp','Shy','Silent','Silver','Sleepy','Sly','Smoky','Sneaky','Solar','Sunny','Swift','Velvet','Vivid','Wandering','Wild','Windy','Witty'];
+  const NAME_ANIMALS = ['Otter','Falcon','Panther','Sparrow','Tiger','Wolf','Fox','Owl','Lynx','Heron','Raven','Badger','Dolphin','Koala','Panda','Rabbit','Turtle','Eagle','Bear','Deer','Hawk','Ibex','Jaguar','Koi','Lemur','Moose','Newt','Orca','Puma','Quokka','Robin','Seal','Toucan','Urchin','Viper','Walrus','Yak','Zebra','Crane','Finch','Gecko','Iguana','Jay','Kite','Loris','Mantis','Nightowl','Opossum','Pelican'];
+
+  function hashString(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+    }
+    return Math.abs(h);
+  }
+
+  function nameFromPeerId(peerId) {
+    if (!peerId) return 'Someone';
+    const h = hashString(peerId);
+    const adj = NAME_ADJECTIVES[h % NAME_ADJECTIVES.length];
+    const animal = NAME_ANIMALS[Math.floor(h / NAME_ADJECTIVES.length) % NAME_ANIMALS.length];
+    return adj + ' ' + animal;
+  }
+
   function broadcast(payload, exceptConn) {
     connections.forEach((c) => {
       if (c !== exceptConn && c.open) c.send(payload);
     });
+  }
+
+  // ---- Tab notification for new messages ----
+  // While the tab is unfocused/hidden, an incoming chat message swaps the
+  // favicon for a version with a red dot and prefixes the title, so it's
+  // visible at a glance in the tab strip. Clears itself the moment the tab
+  // regains focus.
+  let hasUnread = false;
+  const baseTitle = document.title;
+  let faviconLink = document.querySelector('link[rel="icon"]');
+  if (!faviconLink) {
+    faviconLink = document.createElement('link');
+    faviconLink.rel = 'icon';
+    document.head.appendChild(faviconLink);
+  }
+
+  function drawFavicon(withDot) {
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+    ctx.fillStyle = '#d87a3a';
+    ctx.fill();
+    if (withDot) {
+      ctx.beginPath();
+      ctx.arc(size - 15, 15, 13, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff3b30';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#14131a';
+      ctx.stroke();
+    }
+    return canvas.toDataURL('image/png');
+  }
+
+  const faviconNormal = drawFavicon(false);
+  const faviconUnread = drawFavicon(true);
+  faviconLink.href = faviconNormal;
+
+  function setUnread(on) {
+    hasUnread = on;
+    faviconLink.href = on ? faviconUnread : faviconNormal;
+    document.title = on ? ('\u2022 ' + baseTitle) : baseTitle;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && hasUnread) setUnread(false);
+  });
+
+  function notifyNewMessage() {
+    if (document.hidden) setUnread(true);
   }
 
   // Drag-and-drop background media (image, gif, video)
@@ -1521,10 +1609,18 @@
     peekTimeout = setTimeout(() => chatBodyWrap.classList.remove('peek'), 2500);
   });
 
-  function addMessage(text, mine) {
+  function addMessage(text, mine, name) {
     const div = document.createElement('div');
     div.className = 'msg ' + (mine ? 'me' : 'them');
-    div.textContent = text;
+    if (!mine && name) {
+      const nameEl = document.createElement('div');
+      nameEl.className = 'msg-name';
+      nameEl.textContent = name;
+      div.appendChild(nameEl);
+    }
+    const textEl = document.createElement('div');
+    textEl.textContent = text;
+    div.appendChild(textEl);
     chatBody.appendChild(div);
     chatBody.scrollTop = chatBody.scrollHeight;
   }
@@ -1573,14 +1669,17 @@
       try { conn.close(); } catch (e) {}
       return;
     }
+    conn.displayName = nameFromPeerId(conn.peer); // this peer's unique per-session name
     connections.add(conn);
     conn.on('open', () => {
       updateStatus();
+      addSystemNote(conn.displayName + ' joined the room.');
       sendCurrentStateTo(conn, 0, epoch);
     });
     conn.on('data', (data) => handleIncomingData(data, conn));
     conn.on('close', () => {
       connections.delete(conn);
+      addSystemNote(conn.displayName + ' left the room.');
       updateStatus();
     });
     conn.on('error', () => {
@@ -1659,7 +1758,8 @@
       applyIncomingDraw(data);
       if (isHost) broadcast(data, conn);
     } else if (data.text) {
-      addMessage(data.text, false);
+      addMessage(data.text, false, data.name || conn.displayName);
+      notifyNewMessage();
       if (isHost) broadcast(data, conn);
     }
   }
@@ -1671,6 +1771,7 @@
     peer.on('open', (id) => {
       if (epoch !== roomEpoch) { peer.destroy(); return; }
       myPeerId = id;
+      myName = nameFromPeerId(id);
       setStatus('waiting for others', false);
     });
     peer.on('connection', (conn) => wireConnection(conn, epoch));
@@ -1698,6 +1799,7 @@
     peer.on('open', (id) => {
       if (epoch !== roomEpoch) { peer.destroy(); return; }
       myPeerId = id;
+      myName = nameFromPeerId(id);
       if (id === hostPeerId) {
         // Extremely unlikely id collision with ourselves — just claim the room directly.
         settled = true;
@@ -1812,7 +1914,7 @@
     if (connections.size === 0) {
       addSystemNote('No one else is in this room yet.');
     } else {
-      broadcast({ text: text });
+      broadcast({ text: text, name: myName });
     }
     addMessage(text, true);
     chatInput.value = '';
@@ -1837,6 +1939,7 @@
     } else {
       document.body.style.overflow = '';
     }
+    if (opening && hasUnread) setUnread(false);
   });
   chatClose.addEventListener('click', () => {
     chatPopup.classList.remove('open', 'fullscreen');
